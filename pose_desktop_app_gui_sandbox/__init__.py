@@ -1,0 +1,1 @@
+"""Desktop video analysis application."""
