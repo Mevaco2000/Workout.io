@@ -1,19 +1,22 @@
 opencv-python
-roboflow
+numpy
+pillow
+matplotlib
+pandas
+tqdm
 ultralytics
 mediapipe
+
+# Optional components used by additional modules/scripts in this repository.
 fastapi
 uvicorn
 python-multipart
 streamlit
 altair
-pandas
 streamlit-webrtc
 av
 streamlit-autorefresh
 yt-dlp
+roboflow
 jsonschema-specifications
-Pillow
-matplotlib
-tqdm
 rfdetr[train,loggers]

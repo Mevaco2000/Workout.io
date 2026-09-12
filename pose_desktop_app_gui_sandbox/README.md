@@ -1,28 +1,59 @@
-# Pose Desktop App
+# Desktop System for Strength Training Monitoring and Analysis
 
-Nowa aplikacja desktopowa do analizy wideo i kamerki z wykorzystaniem OpenCV, YOLO v26 i MediaPipe.
+Desktop application for video/camera analysis based on OpenCV, YOLO and MediaPipe.
 
-## Funkcje
-- wczytanie pliku wideo lub start z kamerki
-- wybor modelu pose: YOLO v26 n/s/m/l lub MediaPipe Lite/Full/Heavy
-- opcjonalne sledzenie sztangi z wyborem modelu
-- opcjonalny dodatkowy model YOLO wskazywany z pliku `.pt`, nanoszony bezposrednio na podglad; dla modeli pose rysowane sa tez keypointy i szkielet
-- pause, wznowienie i anulowanie przetwarzania
-- zmiana proporcji i rozmiaru podgladu podczas pracy
-- zapis punktow do pliku `jsonl` na dysku
-- wykresy czasowe punktow po pauzie lub po zakonczeniu
-- liczenie powtorzen dla cwiczen: deadlift, squat, OHP, rows, lateral raises, bicep curls, pushups
+## Features
+- video file input or live camera input
+- pose model selection: YOLO v26 n/s/m/l or MediaPipe Lite/Full/Heavy
+- optional barbell tracking with selectable model
+- optional additional YOLO model loaded from `.pt`
+- pause, resume and cancel processing
+- live preview scaling and aspect ratio changes
+- JSONL keypoint export
+- time charts after pause or after run
+- repetition counting for: deadlift, squat, OHP, rows, lateral raises, bicep curls, pushups
 
-## Start
+## Reproducible Setup From Git Clone
+
+1. Clone repository:
+
 ```powershell
+git clone https://github.com/Mevaco2000/Workout.io.git
+cd Workout.io
+```
+
+2. Create and activate virtual environment (recommended):
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
+
+3. Install dependencies:
+
+```powershell
+pip install --upgrade pip
 pip install -r requirements.txt
+```
+
+4. Download optional pose and MediaPipe models:
+
+```powershell
 python download_optional_models.py
+```
+
+5. Run application:
+
+```powershell
 python run_pose_desktop_app_gui_sandbox.py
 ```
 
-## Uwagi
-- W paczce na stale zostaja tylko `yolo26_barbell_tracker_no_validation.pt` oraz `spinal_s.pt`.
-- Modele YOLO pose i MediaPipe mozna pobrac pozniej przez `python download_optional_models.py`.
-- Jesli automatyczne pobieranie YOLO pose przez `ultralytics` nie zadziala, wpisz bezposrednie URL-e w `YOLO_POSE_SOURCES` na gorze skryptu.
-- Jesli dodatkowy model pose zwraca 4 keypointy, sa one sledzone i zapisywane jako: `koniec_szyi`, `lopatka`, `poczatek_odcinka_ledzwiowego`, `koniec_odcinka_ledzwiowego`.
-- Punkty sa zapisywane w katalogu `pose_desktop_runtime/`.
+## Assets (Splash and Info)
+
+- UI icons and splash/info graphics are loaded from `apka_treningowa/` in repository root.
+- If this folder is not present in the repo checkout, application falls back to `../apka_treningowa/`.
+
+## Notes
+
+- Runtime outputs are saved in `pose_desktop_runtime/`.
+- If auto-download via ultralytics fails, set direct URLs in `YOLO_POSE_SOURCES` in `download_optional_models.py`.
