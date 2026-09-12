@@ -21,10 +21,10 @@ MEDIAPIPE_MODEL_URLS = {
 MEDIAPIPE_MODEL_DIR = ROOT_DIR / "mediapipe_models"
 
 BARBELL_MODEL_OPTIONS = {
-    "Barbell tracker no validation": ROOT_DIR / "yolo26_barbell_tracker_no_validation.pt",
+    "Barbell tracker YOLO v26 n": ROOT_DIR / "barbell_yolo26n.pt",
 }
 
-DEFAULT_AUX_YOLO_MODEL_PATH = ROOT_DIR / "spinal_s.pt"
+DEFAULT_AUX_YOLO_MODEL_PATH = ROOT_DIR / "model_spinal_9pts.pt"
 DEFAULT_EXERCISE_LSTM_MODEL_PATH = ROOT_DIR / "artifacts" / "exercise_lstm" / "exercise_lstm.pt"
 DEFAULT_EXERCISE_LSTM_BBOX_MODEL_PATH = ROOT_DIR / "artifacts" / "exercise_lstm" / "exercise_lstm_normalized.pt"
 AUTO_EXERCISE_MODEL_SEARCH_DIRS = [
@@ -112,18 +112,47 @@ SKELETON_CONNECTIONS = [
     ("right_knee", "right_ankle"),
 ]
 
-AUXILIARY_KEYPOINT_NAMES = {
-    0: "neck_end",
-    1: "shoulder_blade",
-    2: "lumbar_start",
-    3: "lumbar_end",
+AUXILIARY_KEYPOINT_MODELS = {
+    "4-point": {
+        "names": {
+            0: "neck_end",
+            1: "shoulder_blade",
+            2: "lumbar_start",
+            3: "lumbar_end",
+        },
+        "connections": [
+            ("neck_end", "shoulder_blade"),
+            ("shoulder_blade", "lumbar_start"),
+            ("lumbar_start", "lumbar_end"),
+        ],
+    },
+    "9-point": {
+        "names": {
+            0: "neck_start",
+            1: "neck_end",
+            2: "thoracic_start",
+            3: "thoracic_1",
+            4: "thoracic_2",
+            5: "thoracic_end",
+            6: "lumbar_start",
+            7: "lumbar_1",
+            8: "lumbar_end",
+        },
+        "connections": [
+            ("neck_start", "neck_end"),
+            ("neck_end", "thoracic_start"),
+            ("thoracic_start", "thoracic_1"),
+            ("thoracic_1", "thoracic_2"),
+            ("thoracic_2", "thoracic_end"),
+            ("thoracic_end", "lumbar_start"),
+            ("lumbar_start", "lumbar_1"),
+            ("lumbar_1", "lumbar_end"),
+        ],
+    },
 }
 
-AUXILIARY_KEYPOINT_CONNECTIONS = [
-    ("neck_end", "shoulder_blade"),
-    ("shoulder_blade", "lumbar_start"),
-    ("lumbar_start", "lumbar_end"),
-]
+AUXILIARY_KEYPOINT_MODEL_OPTIONS = list(AUXILIARY_KEYPOINT_MODELS.keys())
+DEFAULT_AUXILIARY_KEYPOINT_MODEL = "4-point"
 
 CHART_POINTS = [
     "nose",
@@ -140,14 +169,28 @@ CHART_POINTS = [
     "left_ankle",
     "right_ankle",
     "barbell_center",
+    "neck_start",
     "neck_end",
     "shoulder_blade",
+    "thoracic_start",
+    "thoracic_1",
+    "thoracic_2",
+    "thoracic_end",
     "lumbar_start",
+    "lumbar_1",
     "lumbar_end",
 ]
 
 BARBELL_SPEED_CHART = "barbell_speed"
-CHART_OPTIONS = CHART_POINTS + [BARBELL_SPEED_CHART]
+BARBELL_POSITION_CHART = "barbell_position"
+CHART_OPTIONS = CHART_POINTS + [BARBELL_SPEED_CHART, BARBELL_POSITION_CHART]
+
+
+def get_auxiliary_keypoint_schema(selection: str) -> tuple[dict[int, str], list[tuple[str, str]]]:
+    schema = AUXILIARY_KEYPOINT_MODELS.get(selection) or AUXILIARY_KEYPOINT_MODELS[DEFAULT_AUXILIARY_KEYPOINT_MODEL]
+    names = dict(schema["names"])
+    connections = list(schema["connections"])
+    return names, connections
 
 
 def discover_exercise_classifier_models() -> dict[str, Path]:

@@ -53,7 +53,21 @@ python run_pose_desktop_app_gui_sandbox.py
 - UI icons and splash/info graphics are loaded from `apka_treningowa/` in repository root.
 - If this folder is not present in the repo checkout, application falls back to `../apka_treningowa/`.
 
+## Author
+
+- Rafal Wysocki
+- Poznan University of Technology
+
+## Conference Note
+
+This project was prepared for SPA Conference 2026.
+Conference website: https://www.spaconference.org.pl/index.php
+
 ## Notes
 
 - Runtime outputs are saved in `pose_desktop_runtime/`.
 - If auto-download via ultralytics fails, set direct URLs in `YOLO_POSE_SOURCES` in `download_optional_models.py`.
+- Repository model set is reduced. Kept/added model files in root are:
+	- `yolo26l-pose.pt`
+	- `barbell_yolo26n.pt`
+	- `model_spinal_9pts.pt`
