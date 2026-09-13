@@ -33,6 +33,9 @@ from .worker import AnalysisSettings, FramePacket, StatePacket, VideoAnalysisWor
 AUXILIARY_POINT_BASE_RADIUS = 4
 AUXILIARY_POINT_SCALE_MIN = 100
 AUXILIARY_POINT_SCALE_MAX = 1000
+BARBELL_PATH_THICKNESS_MIN = 1
+BARBELL_PATH_THICKNESS_MAX = 12
+BARBELL_PATH_THICKNESS_DEFAULT = 2
 MODEL_CONFIG_PATH = RUNTIME_ROOT / "gui_last_models.json"
 LEGACY_MODEL_CONFIG_PATH = RUNTIME_ROOT / "gui_sandbox_last_models.json"
 VIDEO_ROTATION_OPTIONS = {
@@ -43,8 +46,8 @@ VIDEO_ROTATION_OPTIONS = {
 
 
 def _resolve_icon_assets_dir() -> Path:
-    repo_local_assets = Path(__file__).resolve().parents[1] / "apka_treningowa"
-    parent_assets = Path(__file__).resolve().parents[2] / "apka_treningowa"
+    repo_local_assets = Path(__file__).resolve().parents[1] / "icons"
+    parent_assets = Path(__file__).resolve().parents[2] / "icons"
     if repo_local_assets.exists():
         return repo_local_assets
     return parent_assets
@@ -535,6 +538,8 @@ class PoseDesktopApp(tk.Tk):
         self.aux_yolo_conf_var = tk.DoubleVar(value=0.25)
         self.aux_point_scale_var = tk.DoubleVar(value=100.0)
         self.aux_point_scale_hint_var = tk.StringVar(value="100%")
+        self.barbell_path_thickness_var = tk.DoubleVar(value=float(BARBELL_PATH_THICKNESS_DEFAULT))
+        self.barbell_path_thickness_hint_var = tk.StringVar(value=f"{BARBELL_PATH_THICKNESS_DEFAULT}px")
         self.exercise_var = tk.StringVar(value=EXERCISES[0])
         self.auto_model_var = tk.StringVar(value="")
         self.auto_model_hint_var = tk.StringVar(value="")
@@ -822,7 +827,7 @@ class PoseDesktopApp(tk.Tk):
         else:
             tk.Label(
                 body,
-                text="Nie znaleziono banera w folderze apka_treningowa.\n"
+                text="Nie znaleziono banera w folderze icons.\n"
                 "Dodaj plik banner.png albo info_banner.png, aby wyswietlac logotypy w oknie Info.",
                 bg=self._palette["bg_panel"],
                 fg=self._palette["fg_muted"],
@@ -1059,6 +1064,11 @@ class PoseDesktopApp(tk.Tk):
             style="PanelMuted.TLabel",
             font=("Segoe UI", 9),
         ).pack(anchor="w", pady=(2, 0))
+        ttk.Button(
+            sidebar_header,
+            text="Save settings",
+            command=self._save_last_model_configuration,
+        ).pack(anchor="e", pady=(8, 0))
 
         sidebar_width_row = ttk.Frame(sidebar_header, style="Panel.TFrame")
         sidebar_width_row.pack(fill="x", pady=(8, 0))
@@ -1235,6 +1245,18 @@ class PoseDesktopApp(tk.Tk):
             variable=self.aux_point_scale_var,
             orient="horizontal",
             command=self._on_auxiliary_point_scale_changed,
+        ).pack(fill="x", pady=(4, 0))
+        barbell_path_row = ttk.Frame(workout_frame, style="Panel.TFrame")
+        barbell_path_row.pack(fill="x", pady=(8, 0))
+        ttk.Label(barbell_path_row, text="Barbell path width").pack(side="left")
+        ttk.Label(barbell_path_row, textvariable=self.barbell_path_thickness_hint_var, style="PanelMuted.TLabel").pack(side="right")
+        ttk.Scale(
+            workout_frame,
+            from_=BARBELL_PATH_THICKNESS_MIN,
+            to=BARBELL_PATH_THICKNESS_MAX,
+            variable=self.barbell_path_thickness_var,
+            orient="horizontal",
+            command=self._on_barbell_path_thickness_changed,
         ).pack(fill="x", pady=(4, 0))
 
         chart_frame = ttk.LabelFrame(controls, text="Charts", padding=8)
@@ -1568,6 +1590,7 @@ class PoseDesktopApp(tk.Tk):
         self.video_path_var.set(selected)
         self.source_var.set("video")
         self._load_video_preview(selected)
+        self._save_last_model_configuration()
 
     def _choose_aux_yolo_model(self) -> None:
         selected = filedialog.askopenfilename(
@@ -1708,22 +1731,120 @@ class PoseDesktopApp(tk.Tk):
         if isinstance(auto_model_path, str) and auto_model_path:
             self._pending_auto_model_path = auto_model_path
 
+        source_type = data.get("source_type")
+        if isinstance(source_type, str) and source_type in {"video", "camera"}:
+            self.source_var.set(source_type)
+
+        source_path = data.get("source_path")
+        if isinstance(source_path, str) and source_path:
+            source_file = Path(source_path)
+            if source_file.exists():
+                self.selected_video_path = str(source_file)
+                self.video_path_var.set(str(source_file))
+
+        camera_index = data.get("camera_index")
+        if isinstance(camera_index, int):
+            self.camera_index_var.set(max(0, camera_index))
+
+        pose_person_index = data.get("pose_person_index")
+        if isinstance(pose_person_index, int):
+            self.pose_person_index_var.set(max(1, pose_person_index))
+
+        show_pose_preview = data.get("show_pose_preview")
+        if isinstance(show_pose_preview, bool):
+            self.show_pose_preview_var.set(show_pose_preview)
+
+        reset_barbell_path_each_rep = data.get("reset_barbell_path_each_rep")
+        if isinstance(reset_barbell_path_each_rep, bool):
+            self.reset_barbell_path_each_rep_var.set(reset_barbell_path_each_rep)
+
+        always_on_top = data.get("always_on_top")
+        if isinstance(always_on_top, bool):
+            self.always_on_top_var.set(always_on_top)
+
+        pose_confidence_threshold = data.get("pose_confidence_threshold")
+        if isinstance(pose_confidence_threshold, (int, float)):
+            self.pose_conf_var.set(float(max(0.05, min(0.95, pose_confidence_threshold))))
+
+        barbell_confidence_threshold = data.get("barbell_confidence_threshold")
+        if isinstance(barbell_confidence_threshold, (int, float)):
+            self.barbell_conf_var.set(float(max(0.05, min(0.95, barbell_confidence_threshold))))
+
+        auxiliary_yolo_confidence_threshold = data.get("auxiliary_yolo_confidence_threshold")
+        if isinstance(auxiliary_yolo_confidence_threshold, (int, float)):
+            self.aux_yolo_conf_var.set(float(max(0.05, min(0.95, auxiliary_yolo_confidence_threshold))))
+
+        auxiliary_point_scale_percent = data.get("auxiliary_point_scale_percent")
+        if isinstance(auxiliary_point_scale_percent, (int, float)):
+            self.aux_point_scale_var.set(
+                float(max(AUXILIARY_POINT_SCALE_MIN, min(AUXILIARY_POINT_SCALE_MAX, int(round(auxiliary_point_scale_percent)))))
+            )
+            self.aux_point_scale_hint_var.set(f"{int(round(self.aux_point_scale_var.get()))}%")
+
+        barbell_path_thickness = data.get("barbell_path_thickness")
+        if isinstance(barbell_path_thickness, (int, float)):
+            self._set_barbell_path_thickness(float(barbell_path_thickness))
+
+        aspect_ratio = data.get("aspect_ratio")
+        if isinstance(aspect_ratio, str) and aspect_ratio in DISPLAY_ASPECT_OPTIONS:
+            self.aspect_ratio_var.set(aspect_ratio)
+
+        video_rotation = data.get("video_rotation")
+        if isinstance(video_rotation, str) and video_rotation in VIDEO_ROTATION_OPTIONS:
+            self.video_rotation_var.set(video_rotation)
+
+        chart_point = data.get("chart_point")
+        if isinstance(chart_point, str) and chart_point in CHART_OPTIONS:
+            self.chart_point_var.set(chart_point)
+
+        sidebar_width = data.get("sidebar_width")
+        if isinstance(sidebar_width, int):
+            width = max(self._sidebar_min_width, min(self._sidebar_max_width, sidebar_width))
+            self.sidebar_width_var.set(width)
+            self.sidebar_width_hint_var.set(f"{width}px")
+
+        pose_target_x_norm = data.get("pose_target_x_norm")
+        pose_target_y_norm = data.get("pose_target_y_norm")
+        if isinstance(pose_target_x_norm, (int, float)) and isinstance(pose_target_y_norm, (int, float)):
+            self.pose_target_point_norm = (
+                max(0.0, min(1.0, float(pose_target_x_norm))),
+                max(0.0, min(1.0, float(pose_target_y_norm))),
+            )
+
     def _save_last_model_configuration(self) -> None:
         selected_auto_model = self.auto_model_options.get(self.auto_model_var.get())
         payload = {
+            "source_type": "camera" if self.source_var.get() == "camera" else "video",
+            "source_path": self.selected_video_path,
+            "camera_index": int(self.camera_index_var.get()),
             "pose_selection": self.pose_model_var.get(),
             "pose_model_path": self._resolve_pose_model_path(),
+            "pose_person_index": max(1, int(self.pose_person_index_var.get())),
+            "pose_target_x_norm": None if self.pose_target_point_norm is None else float(self.pose_target_point_norm[0]),
+            "pose_target_y_norm": None if self.pose_target_point_norm is None else float(self.pose_target_point_norm[1]),
             "barbell_selection": self.barbell_model_var.get(),
             "barbell_model_path": self._resolve_barbell_model_path(),
+            "show_pose_preview": bool(self.show_pose_preview_var.get()),
             "auxiliary_yolo_path": self.aux_yolo_path_var.get(),
             "auxiliary_keypoint_model": self.aux_keypoint_model_var.get(),
             "enable_face_blur": bool(self.enable_face_blur_var.get()),
             "use_barbell_tracking": bool(self.use_barbell_var.get()),
             "use_auxiliary_yolo": bool(self.use_aux_yolo_var.get()),
+            "reset_barbell_path_each_rep": bool(self.reset_barbell_path_each_rep_var.get()),
             "exercise": self.exercise_var.get(),
             "auto_exercise_model_path": None if selected_auto_model is None else str(selected_auto_model),
+            "pose_confidence_threshold": float(self.pose_conf_var.get()),
+            "barbell_confidence_threshold": float(self.barbell_conf_var.get()),
+            "auxiliary_yolo_confidence_threshold": float(self.aux_yolo_conf_var.get()),
+            "auxiliary_point_scale_percent": float(self.aux_point_scale_var.get()),
+            "barbell_path_thickness": int(round(self.barbell_path_thickness_var.get())),
             "video_scale_percent": float(self.video_scale_percent_var.get()),
             "scale_label": self._get_scale_label(),
+            "aspect_ratio": self.aspect_ratio_var.get(),
+            "video_rotation": self.video_rotation_var.get(),
+            "chart_point": self.chart_point_var.get(),
+            "sidebar_width": int(self.sidebar_width_var.get()),
+            "always_on_top": bool(self.always_on_top_var.get()),
         }
         try:
             MODEL_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -1782,6 +1903,21 @@ class PoseDesktopApp(tk.Tk):
         self.aux_point_scale_hint_var.set(f"{percentage}%")
         self._apply_display_changes()
 
+    def _set_barbell_path_thickness(self, value: float) -> None:
+        thickness = max(BARBELL_PATH_THICKNESS_MIN, min(BARBELL_PATH_THICKNESS_MAX, int(round(float(value)))))
+        self.barbell_path_thickness_var.set(float(thickness))
+        self.barbell_path_thickness_hint_var.set(f"{thickness}px")
+
+    def _on_barbell_path_thickness_changed(self, value: str) -> None:
+        self._set_barbell_path_thickness(float(value))
+        self._apply_display_changes()
+
+    def _get_barbell_path_thickness(self) -> int:
+        return max(
+            BARBELL_PATH_THICKNESS_MIN,
+            min(BARBELL_PATH_THICKNESS_MAX, int(round(self.barbell_path_thickness_var.get()))),
+        )
+
     def _set_video_scale_percent(self, value: float) -> None:
         percentage = max(20, min(200, int(round(float(value)))))
         self.video_scale_percent_var.set(float(percentage))
@@ -1837,6 +1973,7 @@ class PoseDesktopApp(tk.Tk):
             auto_exercise_model_path=None if selected_auto_model_path is None else str(selected_auto_model_path),
             aspect_ratio=self.aspect_ratio_var.get(),
             scale_label=self._get_scale_label(),
+            barbell_path_thickness=self._get_barbell_path_thickness(),
             reset_barbell_path_each_rep=bool(self.reset_barbell_path_each_rep_var.get()),
         )
 
@@ -1882,6 +2019,7 @@ class PoseDesktopApp(tk.Tk):
                 self._get_scale_label(),
                 bool(self.show_pose_preview_var.get()),
                 self._get_auxiliary_point_radius(),
+                self._get_barbell_path_thickness(),
             )
             return
         self._render_preview_frame()
@@ -1947,6 +2085,7 @@ class PoseDesktopApp(tk.Tk):
             self._get_scale_label(),
             bool(self.show_pose_preview_var.get()),
             self._get_auxiliary_point_radius(),
+            self._get_barbell_path_thickness(),
         )
         preview_frame = resize_for_display(self.preview_frame_bgr, display_settings)
         self._display_frame(preview_frame)

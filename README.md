@@ -45,13 +45,13 @@ python download_optional_models.py
 5. Run application:
 
 ```powershell
-python run_pose_desktop_app_gui_sandbox.py
+python run_app_files.py
 ```
 
 ## Assets (Splash and Info)
 
-- UI icons and splash/info graphics are loaded from `apka_treningowa/` in repository root.
-- If this folder is not present in the repo checkout, application falls back to `../apka_treningowa/`.
+- UI icons and splash/info graphics are loaded from `icons/` in repository root.
+- If this folder is not present in the repo checkout, application falls back to `../icons/`.
 
 ## Author
 

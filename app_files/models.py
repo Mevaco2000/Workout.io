@@ -11,8 +11,7 @@ import numpy as np
 from ultralytics import YOLO
 
 from .config import (
-    AUXILIARY_KEYPOINT_CONNECTIONS,
-    AUXILIARY_KEYPOINT_NAMES,
+    DEFAULT_AUXILIARY_KEYPOINT_MODEL,
     BARBELL_MODEL_OPTIONS,
     COCO_KEYPOINT_NAMES,
     DISPLAY_ASPECT_OPTIONS,
@@ -22,6 +21,7 @@ from .config import (
     MEDIAPIPE_MODEL_URLS,
     POSE_MODEL_OPTIONS,
     SKELETON_CONNECTIONS,
+    get_auxiliary_keypoint_schema,
 )
 
 
@@ -31,11 +31,12 @@ class DisplaySettings:
     scale_label: str
     show_pose_overlay: bool = True
     auxiliary_point_radius: int = 4
+    barbell_path_thickness: int = 2
 
 
 def resize_for_display(frame: np.ndarray, settings: DisplaySettings) -> np.ndarray:
     target = DISPLAY_ASPECT_OPTIONS.get(settings.aspect_ratio)
-    scale = DISPLAY_SCALE_OPTIONS.get(settings.scale_label, 1.0)
+    scale = _resolve_scale_factor(settings.scale_label)
     height, width = frame.shape[:2]
     if target is None:
         target_width = max(1, int(width * scale))
@@ -44,6 +45,19 @@ def resize_for_display(frame: np.ndarray, settings: DisplaySettings) -> np.ndarr
         target_width = max(1, int(target[0] * scale))
         target_height = max(1, int(target[1] * scale))
     return cv2.resize(frame, (target_width, target_height), interpolation=cv2.INTER_AREA)
+
+
+def _resolve_scale_factor(scale_label: str) -> float:
+    if scale_label in DISPLAY_SCALE_OPTIONS:
+        return DISPLAY_SCALE_OPTIONS[scale_label]
+    normalized = str(scale_label).strip().replace(",", ".")
+    if normalized.endswith("%"):
+        normalized = normalized[:-1].strip()
+    try:
+        percentage = float(normalized)
+    except (TypeError, ValueError):
+        return 1.0
+    return max(0.1, min(3.0, percentage / 100.0))
 
 
 def validate_pose_selection(selection: str) -> None:
@@ -74,9 +88,19 @@ def validate_aux_yolo_path(model_path: str | Path) -> Path:
 
 
 class YoloPoseModel:
-    def __init__(self, model_path: Path, confidence_threshold: float) -> None:
+    def __init__(self, model_path: Path, confidence_threshold: float, tracked_person_index: int = 1) -> None:
         self.model = YOLO(str(model_path))
         self.confidence_threshold = confidence_threshold
+        self.tracked_person_index = max(1, int(tracked_person_index))
+        self.target_point_norm: tuple[float, float] | None = None
+
+    def set_target_point(self, x_norm: float | None, y_norm: float | None) -> None:
+        if x_norm is None or y_norm is None:
+            self.target_point_norm = None
+            return
+        clamped_x = min(1.0, max(0.0, float(x_norm)))
+        clamped_y = min(1.0, max(0.0, float(y_norm)))
+        self.target_point_norm = (clamped_x, clamped_y)
 
     def predict(self, frame: np.ndarray, draw_overlay: bool = True) -> tuple[np.ndarray, dict[str, dict[str, float]]]:
         annotated = frame.copy()
@@ -86,8 +110,16 @@ class YoloPoseModel:
         if keypoints is None or keypoints.xy is None or len(keypoints.xy) == 0:
             return annotated, tracked
 
-        xy = keypoints.xy[0].cpu().numpy()
-        confidences = keypoints.conf[0].cpu().numpy() if keypoints.conf is not None else np.ones(len(xy))
+        xy_batches = keypoints.xy.cpu().numpy()
+        confidence_batches = keypoints.conf.cpu().numpy() if keypoints.conf is not None else [np.ones(len(points)) for points in xy_batches]
+        people = self._visible_people(xy_batches, confidence_batches)
+        if not people:
+            return annotated, tracked
+        selected_person_index = self._select_person_index(people, frame.shape)
+        if selected_person_index is None:
+            return annotated, tracked
+        xy = xy_batches[selected_person_index]
+        confidences = confidence_batches[selected_person_index]
         for index, (x_value, y_value) in enumerate(xy):
             confidence = float(confidences[index]) if index < len(confidences) else 1.0
             if confidence < self.confidence_threshold:
@@ -113,6 +145,38 @@ class YoloPoseModel:
                     2,
                 )
         return annotated, tracked
+
+    def _visible_people(self, xy_batches: np.ndarray, confidence_batches: np.ndarray | list[np.ndarray]) -> list[tuple[int, float, float]]:
+        visible_people: list[tuple[int, float, float]] = []
+        for person_index, (xy_points, point_confidences) in enumerate(zip(xy_batches, confidence_batches)):
+            visible_xy = [
+                (float(x_value), float(y_value))
+                for (x_value, y_value), confidence_value in zip(xy_points, point_confidences)
+                if float(confidence_value) >= self.confidence_threshold
+            ]
+            if not visible_xy:
+                continue
+            center_x = float(sum(x_value for x_value, _ in visible_xy) / len(visible_xy))
+            center_y = float(sum(y_value for _, y_value in visible_xy) / len(visible_xy))
+            visible_people.append((person_index, center_x, center_y))
+
+        return visible_people
+
+    def _select_person_index(self, visible_people: list[tuple[int, float, float]], frame_shape: tuple[int, ...]) -> int | None:
+        if self.target_point_norm is not None:
+            frame_height, frame_width = frame_shape[:2]
+            target_x = self.target_point_norm[0] * frame_width
+            target_y = self.target_point_norm[1] * frame_height
+            closest_person = min(
+                visible_people,
+                key=lambda person: (person[1] - target_x) ** 2 + (person[2] - target_y) ** 2,
+            )
+            return closest_person[0]
+
+        left_to_right = sorted(visible_people, key=lambda person: person[1])
+        if self.tracked_person_index > len(left_to_right):
+            return None
+        return left_to_right[self.tracked_person_index - 1][0]
 
 
 class MediaPipePoseModel:
@@ -176,14 +240,15 @@ class BarbellTracker:
         self.trajectory_points: deque[tuple[int, int]] = deque(maxlen=2500)
         self.missing_frames = 0
 
-    def annotate(self, frame: np.ndarray) -> tuple[np.ndarray, dict[str, dict[str, float]]]:
+    def annotate(self, frame: np.ndarray, trajectory_thickness: int = 2) -> tuple[np.ndarray, dict[str, dict[str, float]]]:
         annotated = frame.copy()
         tracked: dict[str, dict[str, float]] = {}
+        trajectory_thickness = max(1, int(trajectory_thickness))
         result = self.model.predict(source=frame, verbose=False, conf=self.confidence_threshold)[0]
         boxes = getattr(result, "boxes", None)
         if boxes is None or boxes.xyxy is None or len(boxes.xyxy) == 0:
             self.missing_frames += 1
-            self._draw_trajectory(annotated)
+            self._draw_trajectory(annotated, trajectory_thickness)
             return annotated, tracked
 
         best_confidence = -1.0
@@ -206,26 +271,27 @@ class BarbellTracker:
         if best_center is not None:
             tracked["barbell_center"] = {"x": best_center[0], "y": best_center[1], "confidence": best_confidence}
             self._append_trajectory_point((int(best_center[0]), int(best_center[1])))
-            self._draw_trajectory(annotated)
+            self._draw_trajectory(annotated, trajectory_thickness)
             cv2.circle(annotated, (int(best_center[0]), int(best_center[1])), 5, (0, 90, 255), -1)
         else:
             self.missing_frames += 1
-            self._draw_trajectory(annotated)
+            self._draw_trajectory(annotated, trajectory_thickness)
         return annotated, tracked
 
-    def _draw_trajectory(self, frame: np.ndarray) -> None:
+    def _draw_trajectory(self, frame: np.ndarray, thickness: int) -> None:
         if not self.trajectory_points:
             return
+        point_radius = max(1, int(round(thickness / 2)))
         for point in self.trajectory_points:
             point_x, point_y = point
-            cv2.circle(frame, (point_x, point_y), 2, (0, 160, 255), -1)
-        self._draw_trajectory_segment(frame, list(self.trajectory_points))
+            cv2.circle(frame, (point_x, point_y), point_radius, (0, 160, 255), -1)
+        self._draw_trajectory_segment(frame, list(self.trajectory_points), thickness)
 
-    def _draw_trajectory_segment(self, frame: np.ndarray, segment: list[tuple[int, int]]) -> None:
+    def _draw_trajectory_segment(self, frame: np.ndarray, segment: list[tuple[int, int]], thickness: int) -> None:
         if len(segment) < 2:
             return
         trajectory = np.array(segment, dtype=np.int32).reshape((-1, 1, 2))
-        cv2.polylines(frame, [trajectory], isClosed=False, color=(0, 160, 255), thickness=2)
+        cv2.polylines(frame, [trajectory], isClosed=False, color=(0, 160, 255), thickness=max(1, int(thickness)))
 
     def _append_trajectory_point(self, point: tuple[int, int]) -> None:
         if not self.trajectory_points:
@@ -250,9 +316,11 @@ class BarbellTracker:
 
 
 class AuxiliaryYoloDetector:
-    def __init__(self, model_path: Path, confidence_threshold: float) -> None:
+    def __init__(self, model_path: Path, confidence_threshold: float, keypoint_model: str = DEFAULT_AUXILIARY_KEYPOINT_MODEL) -> None:
         self.model = YOLO(str(model_path))
         self.confidence_threshold = confidence_threshold
+        self.keypoint_model = keypoint_model
+        self.keypoint_names, self.keypoint_connections = get_auxiliary_keypoint_schema(keypoint_model)
 
     def annotate(self, frame: np.ndarray, point_radius: int = 4) -> tuple[np.ndarray, list[str], dict[str, dict[str, float]]]:
         annotated = frame.copy()
@@ -336,31 +404,67 @@ class AuxiliaryYoloDetector:
         return tracked_points
 
     def _resolve_keypoint_name(self, index: int, keypoint_count: int) -> str | None:
-        if keypoint_count == len(AUXILIARY_KEYPOINT_NAMES):
-            return AUXILIARY_KEYPOINT_NAMES.get(index)
+        if keypoint_count == len(self.keypoint_names):
+            return self.keypoint_names.get(index)
+        if index in self.keypoint_names:
+            return self.keypoint_names.get(index)
         return COCO_KEYPOINT_NAMES.get(index)
 
     def _resolve_connections(self, keypoint_count: int) -> list[tuple[str, str]]:
-        if keypoint_count == len(AUXILIARY_KEYPOINT_NAMES):
-            return AUXILIARY_KEYPOINT_CONNECTIONS
+        if keypoint_count == len(self.keypoint_names):
+            return self.keypoint_connections
         return SKELETON_CONNECTIONS
 
 
+class FaceBlurDetector:
+    def __init__(self) -> None:
+        cascade_path = Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml"
+        self.detector = cv2.CascadeClassifier(str(cascade_path))
+        if self.detector.empty():
+            raise RuntimeError(f"Failed to load face detector cascade: {cascade_path}")
+
+    def blur_faces(self, frame: np.ndarray) -> np.ndarray:
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        faces = self.detector.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(24, 24))
+        if len(faces) == 0:
+            return frame
+
+        for x_value, y_value, width, height in faces:
+            x1 = max(0, int(x_value))
+            y1 = max(0, int(y_value))
+            x2 = min(frame.shape[1], x1 + int(width))
+            y2 = min(frame.shape[0], y1 + int(height))
+            if x2 <= x1 or y2 <= y1:
+                continue
+            roi = frame[y1:y2, x1:x2]
+            kernel_size = max(15, (min(roi.shape[0], roi.shape[1]) // 3) | 1)
+            frame[y1:y2, x1:x2] = cv2.GaussianBlur(roi, (kernel_size, kernel_size), 0)
+        return frame
+
+
 class PipelineModels:
-    def __init__(self, pose_model: Any, barbell_tracker: BarbellTracker | None, auxiliary_detector: AuxiliaryYoloDetector | None) -> None:
+    def __init__(
+        self,
+        pose_model: Any,
+        barbell_tracker: BarbellTracker | None,
+        auxiliary_detector: AuxiliaryYoloDetector | None,
+        face_blur_detector: FaceBlurDetector | None,
+    ) -> None:
         self.pose_model = pose_model
         self.barbell_tracker = barbell_tracker
         self.auxiliary_detector = auxiliary_detector
+        self.face_blur_detector = face_blur_detector
 
     def process(
         self,
         frame: np.ndarray,
         show_pose_overlay: bool = True,
         auxiliary_point_radius: int = 4,
+        barbell_path_thickness: int = 2,
     ) -> tuple[np.ndarray, dict[str, dict[str, float]], list[str]]:
         annotated, tracked = self.pose_model.predict(frame, draw_overlay=show_pose_overlay)
         if self.barbell_tracker is not None:
-            annotated, barbell_points = self.barbell_tracker.annotate(annotated)
+            annotated, barbell_points = self.barbell_tracker.annotate(annotated, trajectory_thickness=barbell_path_thickness)
             tracked.update(barbell_points)
         side_predictions: list[str] = []
         if self.auxiliary_detector is not None:
@@ -369,27 +473,38 @@ class PipelineModels:
                 point_radius=auxiliary_point_radius,
             )
             tracked.update(auxiliary_points)
+        if self.face_blur_detector is not None:
+            annotated = self.face_blur_detector.blur_faces(annotated)
         return annotated, tracked, side_predictions
 
     def clear_barbell_trajectory(self) -> None:
         if self.barbell_tracker is not None:
             self.barbell_tracker.clear_trajectory()
 
+    def set_pose_target_point(self, x_norm: float | None, y_norm: float | None) -> None:
+        if hasattr(self.pose_model, "set_target_point"):
+            self.pose_model.set_target_point(x_norm, y_norm)
+
 
 def create_pipeline_models(
     pose_selection: str,
     pose_confidence_threshold: float,
+    pose_person_index: int,
     use_barbell_tracking: bool,
     barbell_selection: str,
     barbell_confidence_threshold: float,
     use_auxiliary_yolo: bool,
     auxiliary_yolo_path: str,
     auxiliary_yolo_confidence_threshold: float,
+    auxiliary_keypoint_model: str = DEFAULT_AUXILIARY_KEYPOINT_MODEL,
+    enable_face_blur: bool = False,
+    pose_target_x_norm: float | None = None,
+    pose_target_y_norm: float | None = None,
 ) -> PipelineModels:
     validate_pose_selection(pose_selection)
     option = POSE_MODEL_OPTIONS[pose_selection]
     if option["backend"] == "yolo":
-        pose_model = YoloPoseModel(Path(option["reference"]), pose_confidence_threshold)
+        pose_model = YoloPoseModel(Path(option["reference"]), pose_confidence_threshold, tracked_person_index=pose_person_index)
     else:
         pose_model = MediaPipePoseModel(str(option["reference"]), pose_confidence_threshold)
 
@@ -401,8 +516,17 @@ def create_pipeline_models(
     auxiliary_detector = None
     if use_auxiliary_yolo:
         model_path = validate_aux_yolo_path(auxiliary_yolo_path)
-        auxiliary_detector = AuxiliaryYoloDetector(model_path, auxiliary_yolo_confidence_threshold)
-    return PipelineModels(pose_model, barbell_tracker, auxiliary_detector)
+        auxiliary_detector = AuxiliaryYoloDetector(
+            model_path,
+            auxiliary_yolo_confidence_threshold,
+            keypoint_model=auxiliary_keypoint_model,
+        )
+
+    face_blur_detector = FaceBlurDetector() if enable_face_blur else None
+
+    pipeline = PipelineModels(pose_model, barbell_tracker, auxiliary_detector, face_blur_detector)
+    pipeline.set_pose_target_point(pose_target_x_norm, pose_target_y_norm)
+    return pipeline
 
 
 def ensure_mediapipe_model_file(variant: str) -> Path:

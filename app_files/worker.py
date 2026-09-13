@@ -23,12 +23,17 @@ class AnalysisSettings:
     source_path: str | None
     camera_index: int
     pose_selection: str
+    pose_person_index: int
+    pose_target_x_norm: float | None
+    pose_target_y_norm: float | None
     show_pose_preview: bool
     auxiliary_point_radius: int
     use_barbell_tracking: bool
     barbell_selection: str
     use_auxiliary_yolo: bool
     auxiliary_yolo_path: str
+    auxiliary_keypoint_model: str
+    enable_face_blur: bool
     pose_confidence_threshold: float
     barbell_confidence_threshold: float
     auxiliary_yolo_confidence_threshold: float
@@ -36,6 +41,7 @@ class AnalysisSettings:
     auto_exercise_model_path: str | None
     aspect_ratio: str
     scale_label: str
+    barbell_path_thickness: int
     reset_barbell_path_each_rep: bool
 
 
@@ -73,8 +79,10 @@ class VideoAnalysisWorker(threading.Thread):
             settings.scale_label,
             settings.show_pose_preview,
             settings.auxiliary_point_radius,
+            settings.barbell_path_thickness,
         )
         self._storage: JsonlPointStorage | None = None
+        self._models = None
 
     def update_display_settings(
         self,
@@ -82,6 +90,7 @@ class VideoAnalysisWorker(threading.Thread):
         scale_label: str,
         show_pose_preview: bool,
         auxiliary_point_radius: int,
+        barbell_path_thickness: int,
     ) -> None:
         with self._display_lock:
             self._display_settings = DisplaySettings(
@@ -89,7 +98,15 @@ class VideoAnalysisWorker(threading.Thread):
                 scale_label,
                 show_pose_preview,
                 auxiliary_point_radius,
+                barbell_path_thickness,
             )
+
+    def update_pose_target(self, x_norm: float | None, y_norm: float | None) -> None:
+        self.settings.pose_target_x_norm = x_norm
+        self.settings.pose_target_y_norm = y_norm
+        models = self._models
+        if models is not None:
+            models.set_pose_target_point(x_norm, y_norm)
 
     @property
     def points_path(self) -> str | None:
@@ -112,13 +129,19 @@ class VideoAnalysisWorker(threading.Thread):
             models = create_pipeline_models(
                 self.settings.pose_selection,
                 self.settings.pose_confidence_threshold,
+                self.settings.pose_person_index,
                 self.settings.use_barbell_tracking,
                 self.settings.barbell_selection,
                 self.settings.barbell_confidence_threshold,
                 self.settings.use_auxiliary_yolo,
                 self.settings.auxiliary_yolo_path,
                 self.settings.auxiliary_yolo_confidence_threshold,
+                self.settings.auxiliary_keypoint_model,
+                self.settings.enable_face_blur,
+                self.settings.pose_target_x_norm,
+                self.settings.pose_target_y_norm,
             )
+            self._models = models
             predictor = create_exercise_predictor(
                 self.settings.exercise,
                 model_path=self.settings.auto_exercise_model_path,
@@ -147,6 +170,7 @@ class VideoAnalysisWorker(threading.Thread):
                     frame,
                     show_pose_overlay=display_settings.show_pose_overlay,
                     auxiliary_point_radius=display_settings.auxiliary_point_radius,
+                    barbell_path_thickness=display_settings.barbell_path_thickness,
                 )
                 predicted_top_labels: list[str] = []
                 if predictor is not None:
@@ -181,6 +205,85 @@ class VideoAnalysisWorker(threading.Thread):
                         status_text += f" | auto: {predicted_top_labels[0]}"
                     else:
                         status_text += " | auto: collecting sequence"
+                if rep_counter is not None and active_exercise in {"OHP", "rows", "deadlift", "lateral raises"}:
+                    debug = rep_counter.debug_snapshot()
+                    metric_value = debug.get("metric")
+                    span_value = debug.get("span")
+                    normalized_value = debug.get("normalized")
+                    down_value = debug.get("down_threshold")
+                    up_value = debug.get("up_threshold")
+                    elbow_angle_value = debug.get("elbow_angle")
+                    deadlift_aux_angle_value = debug.get("deadlift_aux_angle")
+                    deadlift_angle_state_value = debug.get("deadlift_angle_state")
+                    deadlift_ref_top_angle_value = debug.get("deadlift_ref_top_angle")
+                    deadlift_min_angle_value = debug.get("deadlift_min_angle")
+                    deadlift_rising_streak_value = debug.get("deadlift_rising_streak")
+                    deadlift_falling_streak_value = debug.get("deadlift_falling_streak")
+                    rows_cooldown_frames_value = debug.get("rows_cooldown_frames")
+                    rows_work_hold_frames_value = debug.get("rows_work_hold_frames")
+                    rows_return_hold_frames_value = debug.get("rows_return_hold_frames")
+                    lateral_cooldown_frames_value = debug.get("lateral_cooldown_frames")
+                    lateral_work_hold_frames_value = debug.get("lateral_work_hold_frames")
+                    lateral_return_hold_frames_value = debug.get("lateral_return_hold_frames")
+                    metric_text = "na" if metric_value is None else f"{float(metric_value):.1f}"
+                    span_text = "na" if span_value is None else f"{float(span_value):.1f}"
+                    normalized_text = "na" if normalized_value is None else f"{float(normalized_value):.2f}"
+                    down_text = "na" if down_value is None else f"{float(down_value):.2f}"
+                    up_text = "na" if up_value is None else f"{float(up_value):.2f}"
+                    elbow_text = "na" if elbow_angle_value is None else f"{float(elbow_angle_value):.1f}"
+                    deadlift_aux_text = "na" if deadlift_aux_angle_value is None else f"{float(deadlift_aux_angle_value):.1f}"
+                    deadlift_top_text = "na" if deadlift_ref_top_angle_value is None else f"{float(deadlift_ref_top_angle_value):.1f}"
+                    deadlift_min_text = "na" if deadlift_min_angle_value is None else f"{float(deadlift_min_angle_value):.1f}"
+                    deadlift_rise_text = "na" if deadlift_rising_streak_value is None else f"{int(float(deadlift_rising_streak_value))}"
+                    deadlift_fall_text = "na" if deadlift_falling_streak_value is None else f"{int(float(deadlift_falling_streak_value))}"
+                    rows_cd_text = "na" if rows_cooldown_frames_value is None else f"{int(float(rows_cooldown_frames_value))}"
+                    rows_wh_text = "na" if rows_work_hold_frames_value is None else f"{int(float(rows_work_hold_frames_value))}"
+                    rows_rh_text = "na" if rows_return_hold_frames_value is None else f"{int(float(rows_return_hold_frames_value))}"
+                    lat_cd_text = "na" if lateral_cooldown_frames_value is None else f"{int(float(lateral_cooldown_frames_value))}"
+                    lat_wh_text = "na" if lateral_work_hold_frames_value is None else f"{int(float(lateral_work_hold_frames_value))}"
+                    lat_rh_text = "na" if lateral_return_hold_frames_value is None else f"{int(float(lateral_return_hold_frames_value))}"
+                    side_text = str(debug.get("preferred_side") or "na")
+                    if active_exercise == "OHP":
+                        status_text += (
+                            f" | OHP dbg"
+                            f" span={span_text}"
+                            f" n={normalized_text}"
+                            f" phase={debug.get('phase')}"
+                        )
+                    elif active_exercise == "deadlift":
+                        status_text += (
+                            f" | DL dbg"
+                            f" hAng={deadlift_aux_text}"
+                            f" top={deadlift_top_text}"
+                            f" min={deadlift_min_text}"
+                            f" rise={deadlift_rise_text}"
+                            f" fall={deadlift_fall_text}"
+                            f" state={deadlift_angle_state_value}"
+                            f" phase={debug.get('phase')}"
+                        )
+                    else:
+                        if active_exercise == "rows":
+                            debug_label = "ROWS"
+                        elif active_exercise == "lateral raises":
+                            debug_label = "LAT"
+                        else:
+                            debug_label = "DL"
+                        status_text += (
+                            f" | {debug_label} dbg"
+                            f" m={metric_text}"
+                            f" span={span_text}"
+                            f" n={normalized_text}"
+                            f" dn={down_text}"
+                            f" up={up_text}"
+                            f" ang={elbow_text}"
+                            f" hAng={deadlift_aux_text}"
+                            f" side={side_text}"
+                            f" phase={debug.get('phase')}"
+                        )
+                        if active_exercise == "rows":
+                            status_text += f" hold={rows_wh_text}/{rows_rh_text} cd={rows_cd_text}"
+                        elif active_exercise == "lateral raises":
+                            status_text += f" hold={lat_wh_text}/{lat_rh_text} cd={lat_cd_text}"
                 packet = FramePacket(
                     frame_bgr=display_frame,
                     frame_index=frame_index + 1,
@@ -208,6 +311,7 @@ class VideoAnalysisWorker(threading.Thread):
         except Exception as exc:
             self._push_state("error", str(exc), self.points_path)
         finally:
+            self._models = None
             if capture is not None:
                 capture.release()
             if self._storage is not None:
